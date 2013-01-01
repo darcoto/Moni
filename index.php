@@ -1,11 +1,15 @@
 <?php 
+
   function my_warning_handler($errno, $errstr,$errfile,$errline) {
     if(error_reporting()){
       throw new WarningFault($errstr,$errno,$errfile,$errline);
     }
   }
   set_error_handler("my_warning_handler", E_ALL); 
-  
+
+  /* Main Moni Class
+   * 
+   */
   class Moni{
     private $file_options = 'options.inc.php';
     private $status;
@@ -26,7 +30,7 @@
         }  
       };
       $this->status = new stdClass();
-      $this->path_logs = './logs/';
+      $this->path_logs = dirname(__FILE__).'/logs/';
       $this->file_status = sys_get_temp_dir().'/moni_temp_status';
         
       ini_set('default_socket_timeout', 3);
@@ -69,12 +73,16 @@
     public function runCheck(){
       foreach($this->hosts as $host_name=>$host_options){
         foreach($host_options->services as $service_name=>$service_options){
+          $this->output($host_name.'['.$service_name.'] => ');
           try{
-            $status = $this->checkService($host_name,$service_options->port,$service_options->url,$service_options->socket_timeout);
-            $this->setStatus($host_name,$service_name,$status);
+            $status = $this->checkService($host_name,$service_options);
+            $errmsg = false;
           }catch(Monifault $e){
-            $this->setStatus($host_name,$service_name,false,$e->getMessage());
+            $status = 0;
+            $errmsg = $e->getMessage();
           }
+          $this->setStatus($host_name,$service_name,$status);
+          $this->output($status.' '.$errmsg."\n");
         }
       }
       $this->saveStatus();
@@ -90,32 +98,32 @@
       }
       $current_status = $this->readStatus();
       $result = new stdClass();
-      //$result->hosts = $this->hosts;
-      //$result->services = $services;
-      //$result->status = $current_status;
+      $result->services = $services;
+      $result->status = $current_status;
       $result->last_check = date('Y-m-d H:i:s',filemtime($this->file_status));
       
       return json_encode($result);
     }  
     
     //----------------------------------------------------
-    function checkService($host_name,$port,$url,$socket_timeout){
-      $fp = @fsockopen("tcp://".$host_name,$port,$errno,$errstr,$socket_timeout);
+    function checkService($host_name,$service_options){
+
+      $fp = @fsockopen("tcp://".$host_name,$service_options->port,$errno,$errstr,$service_options->socket_timeout);
       if(!$fp) {
-          throw new MoniFault($errstr);
-          
-      } else {
-          $status = "1"; 
+        throw new MoniFault($errstr);
       }
       fclose($fp);
-      if($url){
+      if($service_options->url){
         try{
-          $status = file_get_contents("http://$host_name$url");
+          $res = file_get_contents("http://$host_name".$service_options->url);
         }catch(Exception $e){
           throw new MoniFault($e->getMessage());
         }
+        if($service_options->test != $res){
+          throw new MoniFault($service_options->test." != $res");
+        }
       }    
-      return $status;
+      return 1;
     }
 
     //----------------------------------------------------
@@ -129,6 +137,7 @@
     
     //----------------------------------------------------
     function readStatus(){
+      if(!file_exists($this->file_status)) return new stdClass();
       return json_decode(file_get_contents($this->file_status));
     }
     
@@ -176,6 +185,10 @@
       return $s;
     }
     
+    function output($line){
+      echo $line;
+    }  
+
     function debug($line){
       $this->debug[] = $line;
     }  
@@ -187,6 +200,7 @@
     public $url;
     public $socket_timeout = 2;
     public $retry;  
+    public $test=1;
 
     function set($service_name,$service_options){
       if(!is_object($service_options)){
@@ -203,9 +217,8 @@
     }
   }
   
-  class MoniFault extends Exception{
-    
-  }
+  //------------------------------------------------------------------------------
+  class MoniFault extends Exception{}
   
   //------------------------------------------------------------------------------
   class WarningFault extends Exception{
@@ -221,12 +234,13 @@
   
   
   $m = new Moni();
-  //$m->runCheck();
-  if(isset($_GET['result'])){
+  if(php_sapi_name()==="cli"){
+    $m->runCheck();
+    exit;
+  }else if(isset($_GET['result'])){
     echo $m->show();
     exit;
   }
-  //print_r($m);
 
 ?><html>
   <head>
@@ -234,8 +248,8 @@
     <style>
       #table_hosts{border-top:1px solid #ddd;border-left:1px solid #ddd}
       #table_hosts td{border-bottom:1px solid #ddd;border-right:1px solid #ddd;padding:5px;}
-      #table_hosts td.green{background:#00f;}
-      #table_hosts td.red{background:#00f;}
+      #table_hosts td.green{background:#0f0;}
+      #table_hosts td.red{background:#f00;}
     </style>
     <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
     <script>
@@ -254,7 +268,7 @@
             for(s in data.services){
               
               if(host[s]){
-                html += '<td class="'+(host[s].status==1?'green':'red')+'"'+host[s].status+'</td>';
+                html += '<td class="'+(host[s].status==1?'green':'red')+'">'+(host[s].status?'ok':'problem')+'</td>';
               }else{
                 html += '<td>';
                 html += '</td>';
